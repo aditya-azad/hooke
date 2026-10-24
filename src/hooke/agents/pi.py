@@ -8,9 +8,13 @@ from typing import ClassVar
 
 from .base import AgentEvent, AgentRunner, RunRequest
 
+#: pi's global MCP config (the only MCP source pi reads).
+MCP_JSON = Path.home() / ".pi" / "agent" / "mcp.json"
+
 
 class PiAgent(AgentRunner):
     name = "pi"
+    mcp_config_hint = "~/.pi/agent/mcp.json"
 
     # Tool calls whose ``path`` argument counts as a file write for watcher
     # self-trigger suppression.
@@ -65,3 +69,13 @@ class PiAgent(AgentRunner):
             assistant_message=assistant,
             write_paths=tuple(writes),
         )
+
+    def configured_mcp_servers(self) -> tuple[set[str], bool]:
+        # pi's config is the source of truth for its own runs; a missing
+        # file means zero servers, which deploy validation treats as a
+        # hard failure (unchanged historical behavior).
+        try:
+            data = json.loads(MCP_JSON.read_text())
+        except (OSError, json.JSONDecodeError):
+            return set(), True
+        return set((data.get("mcpServers") or {})), True

@@ -276,7 +276,7 @@ schema = 1
 # Periodic automation: runs every 6 hours.
 #[automation.sync-flashcards]
 #prompt = "Check notes/ for new cards and add them to Anki"
-#agent = "pi"                      # optional; default pi
+#agent = "pi"                      # optional; default pi (also: "claude", "codex")
 #model = "claude-opus-4-5"         # optional
 #thinking = "low"                  # optional
 #mcp_servers = ["anki"]

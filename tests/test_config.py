@@ -295,7 +295,7 @@ def test_get_agent_registry():
     assert "pi" in AgentRunner.known_agents()
     assert isinstance(AgentRunner.get_agent("pi"), PiAgent)
     with pytest.raises(ConfigError):
-        AgentRunner.get_agent("claude")
+        AgentRunner.get_agent("gemini")
 
 
 def test_subclass_auto_registers():
@@ -333,3 +333,157 @@ def test_canonical_json_and_hash():
     assert json.loads(config.canonical_json({"b": 1, "a": 2})) == {"a": 2, "b": 1}
     assert config.config_hash({"a": 1}) == config.config_hash({"a": 1})
     assert config.config_hash({"a": 1}) != config.config_hash({"a": 2})
+
+
+# ---------------------------------------------------------------- agents
+
+from hooke.agents.claude import ClaudeAgent
+from hooke.agents.codex import CodexAgent
+
+
+def test_known_agents_includes_new_backends():
+    assert set(AgentRunner.known_agents()) >= {"pi", "claude", "codex"}
+
+
+def test_claude_build_argv_basics():
+    argv = ClaudeAgent().build_argv(_request(_job(agent="claude"), "prompt here"))
+    assert argv[0] == "claude"
+    i = argv.index("--print")
+    assert argv[i + 1] == "prompt here"
+    assert "--output-format" in argv and "stream-json" in argv
+    assert "--no-session-persistence" in argv
+    assert "--resume" not in argv
+    assert "--disallowedTools" not in argv
+
+
+def test_claude_build_argv_continuity_session():
+    job = _job(agent="claude", continuity=True)
+    argv = ClaudeAgent().build_argv(_request(job, "prompt", "sess-1"))
+    assert argv[argv.index("--resume") + 1] == "sess-1"
+    assert "--no-session-persistence" not in argv
+
+
+def test_claude_build_argv_model_thinking_excluded_mcp():
+    job = _job(agent="claude", model="sonnet", thinking="low")
+    job.cfg["excluded_mcp_servers"] = ["papers"]
+    argv = ClaudeAgent().build_argv(_request(job, "p"))
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert argv[argv.index("--effort") + 1] == "low"
+    assert argv[argv.index("--disallowedTools") + 1] == "mcp__papers"
+
+
+def test_claude_parse_event():
+    agent = ClaudeAgent()
+    ev = agent.parse_event(
+        json.dumps({"type": "system", "subtype": "init", "session_id": "s-1"})
+    )
+    assert ev.session_id == "s-1"
+    assert not ev.assistant_message
+
+    ev = agent.parse_event(
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "name": "Write", "input": {"file_path": "/x/y.md"}},
+                        {"type": "text", "text": "hi"},
+                    ],
+                },
+            }
+        )
+    )
+    assert ev.assistant_message
+    assert ev.write_paths == ("/x/y.md",)
+    assert ev.session_id is None
+
+    assert agent.parse_event("not json").session_id is None
+
+
+def test_codex_build_argv_basics():
+    argv = CodexAgent().build_argv(_request(_job(agent="codex"), "prompt here"))
+    assert argv[:2] == ["codex", "exec"]
+    assert "resume" not in argv
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert "--json" in argv and "--skip-git-repo-check" in argv
+    assert argv[-1] == "prompt here"
+
+
+def test_codex_build_argv_resume():
+    job = _job(agent="codex", continuity=True)
+    argv = CodexAgent().build_argv(_request(job, "prompt", "thread-1"))
+    assert argv[:4] == ["codex", "exec", "resume", "thread-1"]
+    assert any('sandbox_mode="workspace-write"' == a for a in argv)
+
+
+def test_codex_build_argv_model_thinking_excluded_mcp():
+    job = _job(agent="codex", model="gpt-5.2", thinking="high")
+    job.cfg["excluded_mcp_servers"] = ["papers", "anki"]
+    argv = CodexAgent().build_argv(_request(job, "p"))
+    assert argv[argv.index("-m") + 1] == "gpt-5.2"
+    assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
+    pairs = [(argv[i], argv[i + 1]) for i, a in enumerate(argv) if a == "-c"]
+    assert 'mcp_servers.papers.enabled=false' in argv
+    assert 'mcp_servers.anki.enabled=false' in argv
+
+
+def test_codex_parse_event():
+    agent = CodexAgent()
+    ev = agent.parse_event(
+        json.dumps({"type": "thread.started", "thread_id": "t-1"})
+    )
+    assert ev.session_id == "t-1"
+
+    ev = agent.parse_event(
+        json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "done"}})
+    )
+    assert ev.assistant_message
+    assert ev.session_id is None
+
+    ev = agent.parse_event(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "file_change",
+                    "changes": [{"path": "/x/y.md", "kind": "write"}],
+                },
+            }
+        )
+    )
+    assert ev.write_paths == ("/x/y.md",)
+    assert not ev.assistant_message
+
+    assert agent.parse_event("not json").session_id is None
+
+
+def test_configured_mcp_servers_agent_aware(tmp_path, monkeypatch):
+    claude_cfg = tmp_path / "claude.json"
+    claude_cfg.write_text(json.dumps({"mcpServers": {"anki": {}, "papers": {}}}))
+    monkeypatch.setattr("hooke.agents.claude.CLAUDE_JSON", claude_cfg)
+    servers, known = ClaudeAgent().configured_mcp_servers()
+    assert known and servers == {"anki", "papers"}
+
+    codex_cfg = tmp_path / "config.toml"
+    codex_cfg.write_text('[mcp_servers.anki]\ncommand = "x"\n')
+    monkeypatch.setattr("hooke.agents.codex.CODEX_CONFIG", codex_cfg)
+    servers, known = CodexAgent().configured_mcp_servers()
+    assert known and servers == {"anki"}
+
+    # Missing configs degrade to (empty, unknown) — warn, don't fail deploy.
+    monkeypatch.setattr("hooke.agents.claude.CLAUDE_JSON", tmp_path / "nope")
+    assert ClaudeAgent().configured_mcp_servers() == (set(), False)
+
+    # pi keeps its historical strictness: a missing file is still "known".
+    assert PiAgent().configured_mcp_servers()[1] is True
+
+
+def test_codex_parse_event_turn_failed():
+    ev = CodexAgent().parse_event(
+        json.dumps({"type": "turn.failed", "error": {"message": "boom"}})
+    )
+    assert ev.error == "boom"
+
+    ev = CodexAgent().parse_event(json.dumps({"type": "turn.completed", "usage": {}}))
+    assert ev.error is None

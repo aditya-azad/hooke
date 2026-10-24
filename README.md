@@ -66,14 +66,14 @@ Per-automation fields:
 | Field | Default | Meaning |
 |---|---|---|
 | `prompt` | required | The agent's task. Trigger context (changed files, resume note) is appended automatically. |
-| `agent` | `"pi"` | Which registered agent backend runs this automation (see `hooke.agents`; currently only `pi` is implemented). |
-| `mcp_servers` | `[]` | MCP servers this automation may use; must exist in `~/.pi/agent/mcp.json` or deploy fails. |
+| `agent` | `"pi"` | Which registered agent backend runs this automation (see `hooke.agents`; `pi`, `claude`, `codex`). |
+| `mcp_servers` | `[]` | MCP servers this automation may use; validated against the agent's own MCP config at deploy (`~/.pi/agent/mcp.json`, `~/.claude.json`, or `~/.codex/config.toml`). |
 | `schedule` | — | `{ every = "6h" }` — durations like `90s`, `5m`, `6h`, `1d`. |
 | `watch` | — | `{ paths = [...], ignore = [...], debounce = "2s" }` — globs relative to the project root. |
 | `resume_on_restart` | `false` | Re-run automatically after a daemon restart interrupted it. |
-| `continuity` | `false` | Persist the pi session and reuse it for later runs of this automation. |
+| `continuity` | `false` | Persist the agent session and reuse it for later runs of this automation. |
 | `model` / `thinking` | agent defaults | Per-run overrides passed to the agent (`thinking`: off…max). |
-| `timeout` | `30m` | Kill the pi process tree after this long. |
+| `timeout` | `30m` | Kill the agent process tree after this long. |
 | `concurrency` | `1` | Skip-if-running: overlapping triggers are dropped, never queued. |
 
 ## Deploy and manage

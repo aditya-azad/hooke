@@ -43,21 +43,26 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def _check_mcp_servers(norm: dict) -> None:
     """Explicit MCP allowlist enforced at deploy time: fail here, not in a
-    cron run at 3am."""
-    configured: set[str] = set()
-    mcp_json = pathlib.Path.home() / ".pi" / "agent" / "mcp.json"
-    try:
-        data = json.loads(mcp_json.read_text())
-        configured = set((data.get("mcpServers") or {}).keys())
-    except (OSError, json.JSONDecodeError):
-        pass
+    cron run at 3am. Each automation's allowlist is checked against its own
+    agent's MCP configuration (see AgentRunner.configured_mcp_servers); an
+    agent whose config cannot be read degrades to a warning."""
     for auto in norm["automations"].values():
+        agent = AgentRunner.get_agent(auto["agent"])
+        configured, known = agent.configured_mcp_servers()
+        if not known:
+            print(
+                f"warning: could not read {agent.name}'s MCP config "
+                f"({agent.mcp_config_hint}); skipping allowlist validation "
+                f"for automation '{auto['name']}'",
+                file=sys.stderr,
+            )
+            continue
         for server in auto["mcp_servers"]:
             if server not in configured:
                 _fail(
                     f"automation '{auto['name']}' references MCP server '{server}' "
-                    f"which is not configured in {mcp_json} — "
-                    f"configure it with pi first, then deploy"
+                    f"which is not configured in {agent.mcp_config_hint} — "
+                    f"configure it with {agent.name} first, then deploy"
                 )
 
 

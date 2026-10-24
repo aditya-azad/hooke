@@ -261,6 +261,9 @@ class Executor:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=job.root,
+                stdin=asyncio.subprocess.DEVNULL,
+                # Some agents (claude, codex) read piped stdin as extra
+                # prompt input; never let them block on the daemon's stdin.
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,  # own process group → killable as a tree
@@ -273,11 +276,12 @@ class Executor:
 
         session_id: str | None = None
         assistant_output = False
+        agent_error: str | None = None
         writes: list[str] = []
         log_f = log_path.open("a")
 
         async def pump_stdout() -> None:
-            nonlocal session_id, assistant_output
+            nonlocal session_id, assistant_output, agent_error
             # Persist the session id as soon as it is known: if the daemon
             # dies mid-run, boot recovery can reopen the same session.
             session_persisted = False
@@ -296,6 +300,8 @@ class Executor:
                         self.run_store.append({"run_id": run_id, "session_ref": session_id})
                 if ev.assistant_message:
                     assistant_output = True
+                if ev.error:
+                    agent_error = ev.error
                 writes.extend(ev.write_paths)
 
         status: str = "running"
@@ -319,7 +325,11 @@ class Executor:
 
         exit_code = proc.returncode
         if status == "running":  # wait() returned normally
-            if exit_code == 0:
+            if exit_code == 0 and agent_error:
+                # Some agents (claude) exit 0 even when the run failed.
+                status = "failed"
+                error = f"{agent.name} reported an error: {agent_error}"
+            elif exit_code == 0:
                 status = "finished"
             elif assistant_output:
                 status = "failed"

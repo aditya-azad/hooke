@@ -15,9 +15,8 @@ import json
 import os
 import signal
 import time
-from pathlib import Path
-
 from . import config, paths, protocol
+from .agents import AgentRunner
 from .executor import Executor, Job
 from .scheduler import boot_next_due, scheduler_loop
 from .stores import RegistryStore, RunStore, ScheduleState
@@ -139,21 +138,19 @@ class Daemon:
 
     # ------------------------------------------------------------- arming
 
-    def _configured_mcp_servers(self) -> set[str]:
-        try:
-            data = json.loads((Path.home() / ".pi" / "agent" / "mcp.json").read_text())
-            return set((data.get("mcpServers") or {}).keys())
-        except (OSError, json.JSONDecodeError):
-            return set()
-
     def _make_cfg(self, auto: dict) -> dict:
-        # Least privilege: pi connects every configured MCP server, so the
-        # per-automation allowlist is enforced by excluding every server the
-        # automation did not name.
+        # Least privilege: the agent connects every configured MCP server,
+        # so the per-automation allowlist is enforced by excluding every
+        # server the automation did not name. Discovery is agent-aware
+        # (pi: ~/.pi/agent/mcp.json, claude: ~/.claude.json, codex:
+        # ~/.codex/config.toml); when an agent's config cannot be read,
+        # nothing is excluded and its own defaults apply.
+        agent = AgentRunner.get_agent(auto.get("agent") or "pi")
+        configured, _known = agent.configured_mcp_servers()
         return {
             **auto,
             "excluded_mcp_servers": sorted(
-                self._configured_mcp_servers() - set(auto.get("mcp_servers") or [])
+                configured - set(auto.get("mcp_servers") or [])
             ),
         }
 

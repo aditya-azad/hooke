@@ -49,6 +49,10 @@ class AgentEvent:
     # Absolute paths the run wrote via write-like tools, for watcher
     # self-trigger suppression.
     write_paths: tuple[str, ...] = ()
+    # Agent-reported run failure (e.g. a result event with ``is_error``).
+    # Some agents exit 0 even when the run failed, so the executor cannot
+    # rely on the exit code alone; the last non-None error wins.
+    error: str | None = None
 
 
 class AgentRunner(ABC):
@@ -61,6 +65,10 @@ class AgentRunner(ABC):
 
     #: Registry key used in hooke.toml (``agent = "<name>"``).
     name: str = ""
+
+    #: Human-readable path of this agent's MCP configuration, used in
+    #: deploy-time validation errors.
+    mcp_config_hint: str = ""
 
     _registry: ClassVar[dict[str, AgentRunner]] = {}
 
@@ -107,3 +115,12 @@ class AgentRunner(ABC):
         """Interpret one stdout line. The base implementation ignores
         everything; agents with structured output override this."""
         return AgentEvent()
+
+    def configured_mcp_servers(self) -> tuple[set[str], bool]:
+        """MCP servers this agent has configured globally, as
+        ``(servers, known)``. The daemon excludes every configured server
+        an automation does not name, and deploy validation checks the
+        allowlist against this set. ``known`` is False when the agent's
+        config could not be read — validation then warns instead of
+        failing, and nothing is excluded (the agent's own defaults apply)."""
+        return set(), False

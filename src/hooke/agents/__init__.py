@@ -13,7 +13,8 @@ The contract an agent must satisfy:
 - ``parse_event`` interprets one stdout line and reports the normalized
   signals the executor depends on: session id (for continuity), whether
   any assistant output was produced (crash vs. failure classification),
-  and which files the run wrote (watcher self-trigger suppression).
+  which files the run wrote (watcher self-trigger suppression), and an
+  agent-reported error — some agents exit 0 even when the run failed.
 
 Per-automation config feeds a ``RunRequest``; agents map the generic knobs
 (``model``, ``thinking``, MCP allowlist, session continuity) onto their own
@@ -21,7 +22,8 @@ CLI flags and protocols.
 
 There is no registry module: subclassing ``AgentRunner`` with a ``name``
 registers the implementation automatically. Concrete implementations live
-in sibling modules (``agents/pi.py``); importing this package imports them.
+in sibling modules (``agents/pi.py``, ``agents/claude.py``,
+``agents/codex.py``); importing this package imports them.
 """
 
 from __future__ import annotations
@@ -35,4 +37,4 @@ __all__ = [
 ]
 
 # Importing the implementation modules registers them via __init_subclass__.
-from . import pi  # noqa: F401
+from . import claude, codex, pi  # noqa: F401
