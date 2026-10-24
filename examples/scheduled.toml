@@ -1,0 +1,20 @@
+# Periodic automations: the daemon fires each one on a schedule.
+# Requires Python 3.14+, pi on PATH, and `hooke install` (the daemon).
+
+[project]
+name = "my-webapp"                 # unique id; collisions rejected at deploy
+schema = 1
+
+[automation.deps-review]
+prompt = "Check package manifests for outdated or vulnerable dependencies and summarize findings in DEPENDENCIES.md"
+agent = "pi"                       # which agent runs this automation (default: pi)
+model = "claude-opus-4-5"          # optional per-automation model override
+mcp_servers = ["papers"]           # explicit allowlist — least privilege
+schedule = { every = "6h" }
+resume_on_restart = false
+continuity = true                  # reuse the persisted pi session between runs
+
+[automation.status-report]
+prompt = "Summarize the git history, open issues, and failing tests from the past week into WEEKLY.md"
+schedule = { every = "1d" }
+timeout = "10m"

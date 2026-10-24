@@ -1,36 +1,43 @@
 # Hooke
 
-Agentic workflow automator: a systemd daemon that watches files and schedules periodic tasks, running each automation through the [pi agent](https://github.com/badlogic/pi-mono) with its available MCP servers.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](pyproject.toml)
+[![Code style: ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-You describe automations in a `hooke.toml` inside any project; a per-user daemon triggers them — on a schedule or when files change — and each run is a real pi agent session with your configured MCP servers, credentials, and project context.
+Agentic workflow automator: a systemd daemon that watches files and schedules periodic tasks, running each automation through your agent with its available MCP servers.
+
+## Why
+
+Every project accumulates chores that an agent could do if it just knew when to start: "run the tests whenever `src/` changes", "summarize new notes every morning", "check dependencies daily". Cron handles *when* but not *what* — it has no model, no tools, no context. Hooke gives you the cron half for free (systemd, already running) and hands each trigger to a real agent session with your project's context and your configured MCP servers.
 
 ## Install
 
-Requires Python 3.14+ and [pi](https://github.com/badlogic/pi-mono) on PATH.
+Requires Python 3.14+ and [pi](https://github.com/earendil-works/pi) or other supported agents on PATH.
+
+1. Install the CLI/daemon onto PATH
 
 ```sh
-# 1. Install the CLI/daemon onto PATH
 uv tool install /path/to/hooke        # or: uv tool install hooke (once published)
+```
 
-# 2. Install + start the systemd daemon (templated per user, starts at boot)
+2. Install + start the systemd daemon (templated per user, starts at boot)
+
+```sh
 hooke install
-#   or, for systems with systemd-homed encrypted homes:
 hooke install --user                  # user unit + loginctl enable-linger
 ```
 
-`hooke install` writes `/etc/systemd/system/hooke@<user>.service`, creates
-`/run/hooke` via tmpfiles.d, symlinks `~/.local/bin/hooke` (what the unit
-executes), and runs `systemctl enable --now hooke@<user>.service`. It will
-prompt for your sudo password.
-
-Check it's alive:
+Check it's alive — you should see the version and a pid:
 
 ```sh
-systemctl status hooke@$USER
-hooke status              # "daemon 0.1.0 (pid ..., user ...)" means the socket works
+$ systemctl status hooke@$USER
+````
+
+```sh
+$ hooke status
 ```
 
-## Create automations
+## Quick start
 
 In any project directory:
 
@@ -76,6 +83,8 @@ Per-automation fields:
 | `timeout` | `30m` | Kill the agent process tree after this long. |
 | `concurrency` | `1` | Skip-if-running: overlapping triggers are dropped, never queued. |
 
+Ready-made configurations live in [`examples/`](examples/README.md) — copy one in as `hooke.toml` and deploy.
+
 ## Deploy and manage
 
 ```sh
@@ -90,9 +99,21 @@ hooke remove my-webapp    # gone from the registry
 
 `deploy` is the only way the daemon's registry changes. It validates fully first — TOML, schema version, glob sanity, MCP server existence, project trust — so mistakes fail loudly now instead of silently at 3am. An identical redeploy is a no-op ("up to date, nothing to do"); a changed one swaps atomically without resetting unchanged automations' timers.
 
-## Caveats
+<details>
+<summary>Table of contents</summary>
 
-- **Project trust** is user-approved in pi; the daemon runs headless, so `hooke deploy` warns when the project root is not in `~/.pi/agent/trust.json` — open pi once in that directory and approve, or add the path to `trust.json`.
+- [Why](#why)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Deploy and manage](#deploy-and-manage)
+- [Troubleshooting](#troubleshooting)
+- [Support](#support)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Development](#development)
+
+</details>
 
 ## Troubleshooting
 
@@ -105,6 +126,25 @@ sudo journalctl -u hooke@$USER -f          # system install
 - A run shows `failed` → read its event stream: `hooke logs --run <id>`.
 - A run shows `timed_out` → raise `timeout` in `hooke.toml` and redeploy.
 - Config errors at deploy quote the exact `hooke.toml` problem; fix and redeploy.
+
+## Support
+
+- **Bugs and questions:** [open an issue](https://github.com/aditya-azad/hooke/issues) — include your `hooke.toml` fragment, the daemon version, and the run's output from `hooke logs --run <id>` (redact anything private).
+
+## Roadmap
+
+- [ ] Publish to PyPI (`uv tool install hooke`)
+- [ ] Boot-time catch-up scan of watched globs (currently fires only on the next change)
+- [ ] `hooke run` — trigger an automation once, on demand
+- [ ] Per-automation notification hooks (e.g. notify on `failed`/`timed_out`)
+
+## Contributing
+
+PRs are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the test/lint/type commands CI runs, and how to submit changes.
+
+## License
+
+[MIT](LICENSE) — see the [LICENSE](LICENSE) file.
 
 ## Development
 

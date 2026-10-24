@@ -1,7 +1,7 @@
 [project]
 name = "hooke"
 version = "0.1.0"
-description = "Add your description here"
+description = "Agentic workflow automator: a systemd daemon that watches files and schedules periodic tasks, running each automation through your agent"
 readme = "README.md"
 authors = [
     { name = "Aditya Azad", email = "adityaazad121@gmail.com" }

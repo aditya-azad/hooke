@@ -1,0 +1,15 @@
+# File-triggered automations: the daemon watches paths and runs the agent
+# when they change. Globs are relative to the project root.
+
+[project]
+name = "my-notes-vault"
+schema = 1
+
+[automation.test-on-change]
+prompt = "Source files changed. Run the test suite and fix any failures you introduced."
+watch = { paths = ["src/**", "tests/**"], ignore = ["**/.git/**", "**/node_modules/**"], debounce = "2s" }
+resume_on_restart = true           # re-run automatically if the daemon restarted mid-run
+
+[automation.index-notes]
+prompt = "Re-index the files that just changed and update the search index"
+watch = { paths = ["notes/**"], debounce = "2s", ignore = ["**/.git/**"] }
