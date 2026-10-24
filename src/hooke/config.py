@@ -18,6 +18,7 @@ SCHEMA_VERSION = 1
 PROTOCOL_VERSION = 1
 HOOKE_VERSION = "0.1.0"
 
+DEFAULT_AGENT = "pi"
 DEFAULT_DEBOUNCE = 2.0
 DEFAULT_TIMEOUT = 30 * 60.0
 DEFAULT_CONCURRENCY = 1
@@ -99,6 +100,12 @@ def normalize_automation(name: str, raw: object) -> dict:
     if not isinstance(prompt, str) or not prompt.strip():
         raise ConfigError(f"automation.{name}.prompt: required, must be a non-empty string")
 
+    agent = raw.get("agent", DEFAULT_AGENT)
+    if not isinstance(agent, str) or not _AUTOMATION_KEY_RE.match(agent):
+        raise ConfigError(
+            f"automation.{name}.agent: must match [a-z0-9][a-z0-9_-]*, got {agent!r}"
+        )
+
     mcp = raw.get("mcp_servers", [])
     if not isinstance(mcp, list) or not all(isinstance(s, str) and s for s in mcp):
         raise ConfigError(f"automation.{name}.mcp_servers: must be a list of server names")
@@ -139,6 +146,7 @@ def normalize_automation(name: str, raw: object) -> dict:
     return {
         "name": name,
         "prompt": prompt,
+        "agent": agent,
         "mcp_servers": list(mcp),
         "schedule": schedule,
         "watch": watch,
@@ -258,7 +266,8 @@ def config_hash(norm: dict) -> str:
 
 INIT_TEMPLATE = '''\
 # hooke.toml — agentic automations for this project.
-# Docs: run each automation through pi with the MCP servers listed below.
+# Each automation runs through an agent (default: pi); per-automation
+# `agent`, `model`, and `thinking` pick who runs it and how.
 
 [project]
 name = "{name}"
@@ -267,6 +276,9 @@ schema = 1
 # Periodic automation: runs every 6 hours.
 #[automation.sync-flashcards]
 #prompt = "Check notes/ for new cards and add them to Anki"
+#agent = "pi"                      # optional; default pi
+#model = "claude-opus-4-5"         # optional
+#thinking = "low"                  # optional
 #mcp_servers = ["anki"]
 #schedule = {{ every = "6h" }}
 #resume_on_restart = false

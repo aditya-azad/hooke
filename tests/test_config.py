@@ -12,7 +12,10 @@ import pytest
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "src"))
 
 from hooke import config
-from hooke.executor import Job, build_pi_argv, build_prompt
+from hooke.agents import AgentRunner, RunRequest
+from hooke.agents.pi import PiAgent
+from hooke.config import ConfigError
+from hooke.executor import Job, build_prompt, build_run_request
 from hooke.scheduler import boot_next_due
 from hooke.stores import RunStore
 
@@ -162,12 +165,13 @@ def test_run_store_merges_partial_records(tmp_path, monkeypatch):
     assert merged["pid"] == 7
 
 
-# ---------------------------------------------------------------- pi bridge
+# ---------------------------------------------------------------- agents
 
 
 def _job(**overrides) -> Job:
     cfg = {
         "prompt": "do the thing",
+        "agent": "pi",
         "mcp_servers": [],
         "schedule": {"every": 60.0},
         "watch": None,
@@ -202,30 +206,124 @@ def test_build_prompt_resume_note():
     assert "interrupted" in text
 
 
-def test_build_argv_excluded_mcp():
-    argv = build_pi_argv(_job(), "prompt here", None)
+def test_agent_defaults_to_pi(tmp_path):
+    norm, _ = config.load_and_validate(write_toml(tmp_path, VALID))
+    assert norm["automations"]["tick"]["agent"] == "pi"
+
+
+def test_agent_custom_and_invalid(tmp_path):
+    body = VALID.replace('prompt = "do the thing"', 'prompt = "do the thing"\nagent = "claude-code"')
+    norm, _ = config.load_and_validate(write_toml(tmp_path, body))
+    assert norm["automations"]["tick"]["agent"] == "claude-code"
+
+    body = VALID.replace('prompt = "do the thing"', 'prompt = "do the thing"\nagent = "Bad Agent"')
+    with pytest.raises(ConfigError):
+        config.load_and_validate(write_toml(tmp_path, body))
+
+
+def test_agent_roundtrips_through_validation(tmp_path):
+    body = VALID.replace('prompt = "do the thing"', 'prompt = "do the thing"\nagent = "pi"')
+    norm, digest = config.load_and_validate(write_toml(tmp_path, body))
+    revalidated = config.validate_normalized(norm)
+    assert revalidated["automations"]["tick"]["agent"] == "pi"
+    assert config.config_hash(revalidated) == digest
+
+
+def _request(job: Job, prompt: str, session_ref: str | None = None) -> RunRequest:
+    return build_run_request(job, prompt, session_ref)
+
+
+def test_build_argv_basics():
+    argv = PiAgent().build_argv(_request(_job(), "prompt here"))
     assert argv[:4] == ["pi", "--mode", "json", "-p"]
     assert "--no-session" in argv
     assert "--exclude-tools" not in argv
-    cfg = _job()
-    cfg.cfg["excluded_mcp_servers"] = ["papers"]
-    argv = build_pi_argv(cfg, "prompt here", None)
+
+
+def test_build_argv_excluded_mcp():
+    job = _job()
+    job.cfg["excluded_mcp_servers"] = ["papers"]
+    argv = PiAgent().build_argv(_request(job, "prompt here"))
     i = argv.index("--exclude-tools")
     assert argv[i + 1] == "mcp__papers__*"
 
 
 def test_build_argv_continuity_session():
     job = _job(continuity=True)
-    argv = build_pi_argv(job, "prompt", "sess-1")
+    argv = PiAgent().build_argv(_request(job, "prompt", "sess-1"))
     i = argv.index("--session-dir")
     assert argv[i + 1].endswith("sessions/proj/auto")
     assert argv[argv.index("--session") + 1] == "sess-1"
 
 
 def test_build_argv_model_thinking():
-    argv = build_pi_argv(_job(model="haiku", thinking="low"), "p", None)
+    argv = PiAgent().build_argv(
+        _request(_job(model="haiku", thinking="low"), "p")
+    )
     assert argv[argv.index("--model") + 1] == "haiku"
     assert argv[argv.index("--thinking") + 1] == "low"
+
+
+def test_pi_parse_event():
+    agent = PiAgent()
+    ev = agent.parse_event(
+        json.dumps(
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "toolCall", "name": "edit", "arguments": {"path": "/x/y.md"}}
+                    ],
+                },
+            }
+        )
+    )
+    assert ev.assistant_message
+    assert ev.write_paths == ("/x/y.md",)
+    assert ev.session_id is None
+
+    ev = agent.parse_event(json.dumps({"type": "session", "id": "s-1"}))
+    assert ev.session_id == "s-1"
+    assert not ev.assistant_message
+
+    assert agent.parse_event("not json").session_id is None
+    assert agent.parse_event("[1,2]").assistant_message is False
+
+
+def test_get_agent_registry():
+    assert "pi" in AgentRunner.known_agents()
+    assert isinstance(AgentRunner.get_agent("pi"), PiAgent)
+    with pytest.raises(ConfigError):
+        AgentRunner.get_agent("claude")
+
+
+def test_subclass_auto_registers():
+    class FakeAgent(AgentRunner):
+        name = "fake-test-agent"
+
+        def build_argv(self, request):
+            return ["fake"]
+
+    assert "fake-test-agent" in AgentRunner.known_agents()
+    assert isinstance(AgentRunner.get_agent("fake-test-agent"), FakeAgent)
+
+    # Unnamed (abstract-ish) intermediates stay unregistered.
+    class Unnamed(AgentRunner):
+        pass
+
+    assert type(AgentRunner.get_agent("fake-test-agent")) is not Unnamed
+
+    # Name collisions are caught at import time.
+    with pytest.raises(ValueError):
+
+        class Clash(AgentRunner):
+            name = "fake-test-agent"
+
+    del AgentRunner._registry["fake-test-agent"]  # don't leak into other tests
+
+
+# ---------------------------------------------------------------- protocol
 
 
 # ---------------------------------------------------------------- protocol

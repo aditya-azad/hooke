@@ -48,6 +48,8 @@ schema = 1
 
 [automation.deps-review]
 prompt = "Check package manifests for outdated or vulnerable dependencies and summarize findings in DEPENDENCIES.md"
+agent = "pi"                       # which agent runs this automation (default: pi)
+model = "claude-opus-4-5"          # optional per-automation model override
 mcp_servers = ["papers"]           # explicit allowlist — least privilege
 schedule = { every = "6h" }
 resume_on_restart = false
@@ -64,12 +66,13 @@ Per-automation fields:
 | Field | Default | Meaning |
 |---|---|---|
 | `prompt` | required | The agent's task. Trigger context (changed files, resume note) is appended automatically. |
+| `agent` | `"pi"` | Which registered agent backend runs this automation (see `hooke.agents`; currently only `pi` is implemented). |
 | `mcp_servers` | `[]` | MCP servers this automation may use; must exist in `~/.pi/agent/mcp.json` or deploy fails. |
 | `schedule` | — | `{ every = "6h" }` — durations like `90s`, `5m`, `6h`, `1d`. |
 | `watch` | — | `{ paths = [...], ignore = [...], debounce = "2s" }` — globs relative to the project root. |
 | `resume_on_restart` | `false` | Re-run automatically after a daemon restart interrupted it. |
 | `continuity` | `false` | Persist the pi session and reuse it for later runs of this automation. |
-| `model` / `thinking` | pi defaults | Per-run overrides (`thinking`: off…max). |
+| `model` / `thinking` | agent defaults | Per-run overrides passed to the agent (`thinking`: off…max). |
 | `timeout` | `30m` | Kill the pi process tree after this long. |
 | `concurrency` | `1` | Skip-if-running: overlapping triggers are dropped, never queued. |
 

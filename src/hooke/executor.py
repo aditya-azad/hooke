@@ -1,8 +1,9 @@
-"""Executor: bounded worker pool that runs each automation through pi.
+"""Executor: bounded worker pool that runs each automation through its
+configured agent (see :mod:`hooke.agents`; default: pi).
 
 Every run gets a run record persisted to runs.jsonl **at enqueue time,
 before the child starts** — that is what makes the boot recovery pass
-trustworthy. pi is invoked per run in JSON mode and its event stream is
+trustworthy. The agent runs headlessly in JSON mode and its event stream is
 streamed into ``run-logs/<run_id>.jsonl``.
 
 Retries apply only to hard crashes (pi exits nonzero and produced no
@@ -14,18 +15,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import signal
 import time
 import uuid
-from pathlib import Path
 
 from . import paths
+from .agents import AgentRunner, RunRequest
 from .stores import RunStore
 
 RETRY_BACKOFF_SECONDS = (30.0, 60.0, 120.0)
-WRITE_TOOLS = {"write", "edit", "multiedit"}
 
 
 class Job:
@@ -89,24 +88,25 @@ def build_prompt(job: Job, resumed_from: str | None) -> str:
     return "\n".join(parts)
 
 
-def build_pi_argv(job: Job, prompt: str, session_ref: str | None) -> list[str]:
-    argv = ["pi", "--mode", "json", "-p", prompt]
-    if job.cfg.get("model"):
-        argv += ["--model", job.cfg["model"]]
-    if job.cfg.get("thinking"):
-        argv += ["--thinking", job.cfg["thinking"]]
-    if job.cfg.get("continuity"):
-        argv += ["--session-dir", str(paths.sessions_dir(job.project, job.automation))]
-        if session_ref:
-            argv += ["--session", session_ref]
-    else:
-        argv += ["--no-session"]
-    # Least privilege: exclude every configured MCP server that is not in
-    # this automation's allowlist (pi names MCP tools mcp__<server>__<tool>).
-    excluded = job.cfg.get("excluded_mcp_servers") or []
-    for server in excluded:
-        argv += ["--exclude-tools", f"mcp__{server}__*"]
-    return argv
+def build_run_request(
+    job: Job, prompt: str, session_ref: str | None
+) -> RunRequest:
+    """Translate the automation config into the agent-neutral run request."""
+    continuity = bool(job.cfg.get("continuity"))
+    return RunRequest(
+        prompt=prompt,
+        cwd=job.root,
+        model=job.cfg.get("model"),
+        thinking=job.cfg.get("thinking"),
+        # Least privilege: exclude every configured MCP server that is not
+        # in this automation's allowlist.
+        excluded_mcp_servers=tuple(job.cfg.get("excluded_mcp_servers") or []),
+        continuity=continuity,
+        session_dir=paths.sessions_dir(job.project, job.automation)
+        if continuity
+        else None,
+        session_ref=session_ref,
+    )
 
 
 class Executor:
@@ -195,7 +195,7 @@ class Executor:
         max_attempts = 1 + len(RETRY_BACKOFF_SECONDS)
         while True:
             attempts += 1
-            status, exit_code, error, writes, session = await self._spawn_pi(
+            status, exit_code, error, writes, session = await self._spawn_agent(
                 job, run_id, session_ref, resumed_from, attempts
             )
             for path in writes:
@@ -232,7 +232,7 @@ class Executor:
             await asyncio.sleep(delay)
             resumed_from = None  # resume marker applies to the first attempt only
 
-    async def _spawn_pi(
+    async def _spawn_agent(
         self,
         job: Job,
         run_id: str,
@@ -240,9 +240,11 @@ class Executor:
         resumed_from: str | None,
         attempt: int,
     ) -> tuple[str, int | None, str | None, list[str], str | None]:
-        """Spawn one pi process. Returns (status, exit_code, error, write_paths, session_id)."""
+        """Spawn one agent process for the automation's configured agent.
+        Returns (status, exit_code, error, write_paths, session_id)."""
+        agent: AgentRunner = AgentRunner.get_agent(job.cfg.get("agent") or "pi")
         prompt = build_prompt(job, resumed_from)
-        argv = build_pi_argv(job, prompt, session_ref)
+        argv = agent.build_argv(build_run_request(job, prompt, session_ref))
         log_path = paths.run_logs_dir() / f"{run_id}.jsonl"
         started = time.time()
         self.run_store.append(
@@ -265,7 +267,7 @@ class Executor:
                 limit=1 << 24,  # pi JSON events (system prompts) exceed the 64KB default
             )
         except FileNotFoundError:
-            return "failed", None, "pi binary not found on PATH", [], None
+            return "failed", None, f"{agent.name} binary not found on PATH", [], None
         self.run_store.append({"run_id": run_id, "pid": proc.pid, "status": "running"})
         self.processes[run_id] = proc
 
@@ -277,7 +279,7 @@ class Executor:
         async def pump_stdout() -> None:
             nonlocal session_id, assistant_output
             # Persist the session id as soon as it is known: if the daemon
-            # dies mid-run, boot recovery can reopen the same pi session.
+            # dies mid-run, boot recovery can reopen the same session.
             session_persisted = False
             assert proc.stdout is not None
             async for raw in proc.stdout:
@@ -286,27 +288,15 @@ class Executor:
                     continue
                 log_f.write(line + "\n")
                 log_f.flush()
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") == "session" and ev.get("id"):
-                    session_id = ev["id"]
+                ev = agent.parse_event(line)
+                if ev.session_id:
+                    session_id = ev.session_id
                     if not session_persisted:
                         session_persisted = True
                         self.run_store.append({"run_id": run_id, "session_ref": session_id})
-                msg = ev.get("message") or {}
-                if ev.get("type") in ("message_start", "message_end") and msg.get("role") == "assistant":
+                if ev.assistant_message:
                     assistant_output = True
-                for item in (msg.get("content") or []) if isinstance(msg.get("content"), list) else []:
-                    if (
-                        isinstance(item, dict)
-                        and item.get("type") == "toolCall"
-                        and item.get("name") in WRITE_TOOLS
-                    ):
-                        p = (item.get("arguments") or {}).get("path")
-                        if p:
-                            writes.append(str(Path(p).resolve()))
+                writes.extend(ev.write_paths)
 
         status: str = "running"
         error: str | None = None
@@ -333,10 +323,10 @@ class Executor:
                 status = "finished"
             elif assistant_output:
                 status = "failed"
-                error = f"pi exited nonzero ({exit_code}) after producing output"
+                error = f"{agent.name} exited nonzero ({exit_code}) after producing output"
             else:
                 status = "crashed"  # hard crash → retryable
-                error = f"pi exited nonzero ({exit_code}) with no assistant output"
+                error = f"{agent.name} exited nonzero ({exit_code}) with no assistant output"
         return status, exit_code, error, writes, session_id
 
     @staticmethod

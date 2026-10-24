@@ -14,6 +14,7 @@ import sys
 import time
 
 from . import config, paths, protocol, systemd
+from .agents import AgentRunner
 from .config import ConfigError
 
 
@@ -60,6 +61,16 @@ def _check_mcp_servers(norm: dict) -> None:
                 )
 
 
+def _check_agents(norm: dict) -> None:
+    """Every automation's agent must be registered — fail at deploy, not
+    in a cron run at 3am."""
+    for auto in norm["automations"].values():
+        try:
+            AgentRunner.get_agent(auto["agent"])
+        except ConfigError as e:
+            _fail(f"automation '{auto['name']}': {e}")
+
+
 def _check_trust(root: pathlib.Path) -> None:
     """Project trust is user-approved in pi; the daemon runs headless, so
     warn loudly at deploy instead of failing silently at 3am."""
@@ -84,6 +95,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         norm, digest = config.load_and_validate(toml)
     except ConfigError as e:
         _fail(str(e))
+    _check_agents(norm)
     _check_mcp_servers(norm)
     _check_trust(root)
 
