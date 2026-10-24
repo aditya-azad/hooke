@@ -11,10 +11,10 @@ import asyncio
 import contextlib
 import fcntl
 import getpass
-import json
 import os
 import signal
 import time
+
 from . import config, paths, protocol
 from .agents import AgentRunner
 from .executor import Executor, Job

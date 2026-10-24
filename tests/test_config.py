@@ -423,7 +423,6 @@ def test_codex_build_argv_model_thinking_excluded_mcp():
     argv = CodexAgent().build_argv(_request(job, "p"))
     assert argv[argv.index("-m") + 1] == "gpt-5.2"
     assert argv[argv.index("-c") + 1] == 'model_reasoning_effort="high"'
-    pairs = [(argv[i], argv[i + 1]) for i, a in enumerate(argv) if a == "-c"]
     assert 'mcp_servers.papers.enabled=false' in argv
     assert 'mcp_servers.anki.enabled=false' in argv
 

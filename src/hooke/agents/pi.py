@@ -78,4 +78,4 @@ class PiAgent(AgentRunner):
             data = json.loads(MCP_JSON.read_text())
         except (OSError, json.JSONDecodeError):
             return set(), True
-        return set((data.get("mcpServers") or {})), True
+        return set(data.get("mcpServers") or {}), True
