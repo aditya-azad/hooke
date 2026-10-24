@@ -6,6 +6,22 @@
 
 Agentic workflow automator: a systemd daemon that watches files and schedules periodic tasks, running each automation through your agent with its available MCP servers.
 
+<details>
+<summary>Table of contents</summary>
+
+- [Why](#why)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Deploy and manage](#deploy-and-manage)
+- [Troubleshooting](#troubleshooting)
+- [Support](#support)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Development](#development)
+
+</details>
+
 ## Why
 
 Every project accumulates chores that an agent could do if it just knew when to start: "run the tests whenever `src/` changes", "summarize new notes every morning", "check dependencies daily". Cron handles *when* but not *what* — it has no model, no tools, no context. Hooke gives you the cron half for free (systemd, already running) and hands each trigger to a real agent session with your project's context and your configured MCP servers.
@@ -98,22 +114,6 @@ hooke remove my-webapp    # gone from the registry
 ```
 
 `deploy` is the only way the daemon's registry changes. It validates fully first — TOML, schema version, glob sanity, MCP server existence, project trust — so mistakes fail loudly now instead of silently at 3am. An identical redeploy is a no-op ("up to date, nothing to do"); a changed one swaps atomically without resetting unchanged automations' timers.
-
-<details>
-<summary>Table of contents</summary>
-
-- [Why](#why)
-- [Install](#install)
-- [Quick start](#quick-start)
-- [Deploy and manage](#deploy-and-manage)
-- [Troubleshooting](#troubleshooting)
-- [Support](#support)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
-- [Development](#development)
-
-</details>
 
 ## Troubleshooting
 
