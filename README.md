@@ -128,12 +128,25 @@ hooke deploy              # in the project dir (or: hooke deploy ~/code/my-webap
 hooke status              # what's armed, next due times, recent runs
 hooke logs -n 20          # run history
 hooke logs --run <id>     # one run's full record + its pi event stream
+hooke stop --run <id>     # kill a run's agent process tree now
 hooke disable my-webapp   # kept in the registry, inert
 hooke enable my-webapp
 hooke remove my-webapp    # gone from the registry
 ```
 
 `deploy` is the only way the daemon's registry changes. It validates fully first — TOML, schema version, glob sanity, script existence, venv + dependency install, MCP server existence, project trust — so mistakes fail loudly now instead of silently at 3am. An identical redeploy is a no-op ("up to date, nothing to do"); a changed one swaps atomically without resetting unchanged automations' timers.
+
+### Stopping runs
+
+A run normally ends on its own, but you can stop active runs at any time:
+
+```sh
+hooke stop --run <id>            # one run
+hooke stop my-webapp             # all active runs of a project
+hooke stop my-webapp --automation test-on-change   # one automation's active runs
+```
+
+Running runs get their process tree killed immediately; queued runs are cancelled before they start; runs parked in retry backoff are cancelled too. Each targeted run is recorded as `stopped` in the run log, so `hooke logs` shows exactly what was interrupted. A stopped run never retries.
 
 ## Troubleshooting
 
@@ -145,6 +158,7 @@ sudo journalctl -u hooke@$USER -f          # system install
 - `hooke status` says "cannot reach hooke daemon" → the unit isn't running; check `systemctl status hooke@$USER` and the journal above.
 - A run shows `failed` → read its event stream: `hooke logs --run <id>`.
 - A run shows `timed_out` → raise `timeout` in `hooke.toml` and redeploy.
+- A run is wedged (or you just want it gone now) → `hooke stop --run <id>`; the killed run is recorded as `stopped` and never retries.
 - Config errors at deploy quote the exact `hooke.toml` problem; fix and redeploy.
 
 ## Support

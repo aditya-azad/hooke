@@ -238,6 +238,29 @@ def _try_query(op: dict) -> dict:
     return reply
 
 
+def cmd_stop(args: argparse.Namespace) -> None:
+    op: dict = {"op": "stop"}
+    if args.run_id:
+        op["run_id"] = args.run_id
+    if args.project:
+        op["project"] = args.project
+    if args.automation:
+        op["automation"] = args.automation
+    reply = _try_query(op)
+    stopped = reply.get("running") or []
+    pending = reply.get("pending") or []
+    retrying = reply.get("retry_scheduled") or []
+    if not (stopped or pending or retrying):
+        print("no matching active runs")
+        return
+    for rid in stopped:
+        print(f"stopped run {rid}")
+    for rid in pending:
+        print(f"cancelled queued run {rid}")
+    for rid in retrying:
+        print(f"cancelled retrying run {rid}")
+
+
 def cmd_daemon(_args: argparse.Namespace) -> None:
     from .daemon import main as daemon_main
 
@@ -282,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
     rm = sub.add_parser("remove", help="remove a project from the daemon registry")
     rm.add_argument("project")
     rm.set_defaults(fn=cmd_remove)
+
+    stop = sub.add_parser("stop", help="stop active runs (kill running agents, cancel queued ones)")
+    stop.add_argument("project", nargs="?", help="stop all active runs of this project")
+    stop.add_argument("--run", dest="run_id", help="stop one run by id")
+    stop.add_argument("--automation", help="stop all active runs of one automation")
+    stop.set_defaults(fn=cmd_stop)
 
     ins = sub.add_parser("install", help="install and start the systemd unit")
     ins.add_argument("--user", action="store_true",

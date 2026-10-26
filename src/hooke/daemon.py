@@ -233,6 +233,8 @@ class Daemon:
             return self._op_status()
         if kind == "logs":
             return self._op_logs(op)
+        if kind == "stop":
+            return await self._op_stop(op)
         return {"ok": False, "error": f"unknown op {kind!r}"}
 
     # ---------------------------------------------------------------- ops
@@ -310,6 +312,17 @@ class Daemon:
             "watched": watched,
             "schedule_state": {k: v for k, v in self.schedule_state.data.items() if k.startswith(name + "/")},
         }
+
+    async def _op_stop(self, op: dict) -> dict:
+        run_id = op.get("run_id")
+        project = op.get("project")
+        automation = op.get("automation")
+        if not run_id and not project and not automation:
+            return {"ok": False, "error": "stop needs a run_id, project, or automation"}
+        if run_id is not None and not isinstance(run_id, str):
+            return {"ok": False, "error": "run_id must be a string"}
+        result = await self.executor.stop(run_id=run_id, project=project, automation=automation)
+        return {"ok": True, **result}
 
     def _op_status(self) -> dict:
         armed = []

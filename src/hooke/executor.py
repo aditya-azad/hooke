@@ -126,6 +126,12 @@ class Executor:
         self.queue: asyncio.Queue[Job | None] = asyncio.Queue()
         self.max_concurrent = max(1, max_concurrent)
         self.active_counts: dict[tuple[str, str], int] = {}
+        # All runs claimed by a worker but not yet finished: either mid-run
+        # with a process in self.processes, or parked in retry backoff.
+        self.active: dict[str, Job] = {}
+        # run_ids flagged by stop(): a queued run is cancelled at dequeue, a
+        # running one is recorded as stopped once its process is reaped.
+        self.stopped: set[str] = set()
         # Paths written by the currently-running (or just-finished) run of an
         # automation, for watcher self-trigger suppression.
         self.recent_writes: dict[tuple[str, str], dict[str, float]] = {}
@@ -171,14 +177,88 @@ class Executor:
         self.queue.put_nowait((job, run_id))  # type: ignore[arg-type]
         return run_id
 
+    async def stop(
+        self,
+        run_id: str | None = None,
+        project: str | None = None,
+        automation: str | None = None,
+    ) -> dict[str, list[str]]:
+        """Stop matching active runs.
+
+        Running runs get their process tree killed and are recorded as
+        ``stopped`` when the worker reaps them. Queued runs are flagged and
+        cancelled by the worker at dequeue. Runs parked in retry backoff are
+        flagged too; the worker writes their terminal record when the backoff
+        sleep returns. Returns ids grouped by category; ``unknown`` is only
+        populated when a specific ``run_id`` matched nothing.
+        """
+
+        def matches(job: Job, rid: str) -> bool:
+            if run_id is not None and rid != run_id:
+                return False
+            if project is not None and job.project != project:
+                return False
+            return not (automation is not None and job.automation != automation)
+
+        running: list[str] = []
+        for rid, proc in list(self.processes.items()):
+            job = self.active.get(rid)
+            if job is not None and matches(job, rid):
+                self.stopped.add(rid)
+                await self._kill_tree(proc)
+                running.append(rid)
+        parked: list[str] = []  # claimed by a worker but between attempts
+        for rid, job in self.active.items():
+            if rid not in self.processes and matches(job, rid):
+                self.stopped.add(rid)
+                parked.append(rid)
+        pending: list[str] = []  # still waiting in the queue
+        # asyncio.Queue exposes no way to inspect entries; snapshot the
+        # internal deque so queued-but-unstarted runs are flagged before a
+        # worker can dequeue them.
+        for item in list(self.queue._queue):
+            if item is None:
+                continue
+            job, rid = item
+            if matches(job, rid):
+                self.stopped.add(rid)
+                pending.append(rid)
+        unknown: list[str] = []
+        if (
+            run_id is not None
+            and run_id not in running
+            and run_id not in parked
+            and run_id not in pending
+        ):
+            unknown.append(run_id)
+        return {
+            "running": running,
+            "retry_scheduled": parked,
+            "pending": pending,
+            "unknown": unknown,
+        }
+
     async def _worker(self, i: int) -> None:
         while True:
             item = await self.queue.get()
             if item is None:
                 return
             job, run_id = item
+            self.active[run_id] = job
             try:
-                await self._run_with_retries(job, run_id)
+                if run_id in self.stopped:
+                    self.stopped.discard(run_id)
+                    self.run_store.append(
+                        {
+                            "run_id": run_id,
+                            "status": "stopped",
+                            "ended_at": time.time(),
+                            "attempts": 0,
+                            "error": "stopped by hooke stop (queued run cancelled)",
+                        }
+                    )
+                else:
+                    await self._run_with_retries(job, run_id)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001 - a worker must never die
@@ -191,6 +271,7 @@ class Executor:
                     }
                 )
             finally:
+                self.active.pop(run_id, None)
                 key = job.key
                 self.active_counts[key] = max(0, self.active_counts.get(key, 1) - 1)
                 self.queue.task_done()
@@ -209,6 +290,13 @@ class Executor:
             status, exit_code, error, writes, session = await self._spawn_agent(
                 job, run_id, session_ref, resumed_from, attempts
             )
+            if run_id in self.stopped:
+                # stop() flagged this run: the process tree was killed (wait()
+                # returned) or stop() raced the spawn. Record terminal — a
+                # stopped run never retries.
+                self.stopped.discard(run_id)
+                status = "stopped"
+                error = "stopped by hooke stop"
             for path in writes:
                 self.recent_writes.setdefault(job.key, {})[path] = time.time() + 10.0
             if session:
@@ -241,6 +329,19 @@ class Executor:
                 }
             )
             await asyncio.sleep(delay)
+            if run_id in self.stopped:
+                # Stopped while parked in retry backoff.
+                self.stopped.discard(run_id)
+                self.run_store.append(
+                    {
+                        "run_id": run_id,
+                        "status": "stopped",
+                        "ended_at": time.time(),
+                        "attempts": attempts,
+                        "error": "stopped by hooke stop (during retry backoff)",
+                    }
+                )
+                return
             resumed_from = None  # resume marker applies to the first attempt only
 
     async def _spawn_agent(
