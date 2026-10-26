@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 SCHEMA_VERSION = 1
 PROTOCOL_VERSION = 1
@@ -93,20 +93,78 @@ def _norm_schedule(raw: object) -> dict | None:
     return {"every": every}
 
 
+def _norm_script(name: str, raw: dict) -> str:
+    """Validate the script path of a script automation."""
+    script = raw.get("script")
+    if not isinstance(script, str) or not script.strip():
+        raise ConfigError(f"automation.{name}.script: must be a non-empty relative path")
+    script = script.strip()
+    p = PurePosixPath(script)
+    if p.is_absolute() or ".." in p.parts:
+        raise ConfigError(
+            f"automation.{name}.script: must be a relative path inside the "
+            f"project, got {script!r}"
+        )
+    return script
+
+
+def _norm_dependencies(name: str, raw: object) -> list[str]:
+    if not isinstance(raw, list) or not all(isinstance(d, str) and d.strip() for d in raw):
+        raise ConfigError(
+            f"automation.{name}.dependencies: must be a list of requirement "
+            "strings (e.g. ['httpx'])"
+        )
+    deps = [d.strip() for d in raw]
+    if len(set(deps)) != len(deps):
+        raise ConfigError(f"automation.{name}.dependencies: duplicate entries")
+    return deps
+
+
 def normalize_automation(name: str, raw: object) -> dict:
     if not isinstance(raw, dict):
         raise ConfigError(f"automation.{name}: must be a table")
-    prompt = raw.get("prompt")
-    if not isinstance(prompt, str) or not prompt.strip():
-        raise ConfigError(f"automation.{name}.prompt: required, must be a non-empty string")
 
-    agent = raw.get("agent", DEFAULT_AGENT)
-    if not isinstance(agent, str) or not _AUTOMATION_KEY_RE.match(agent):
-        raise ConfigError(
-            f"automation.{name}.agent: must match [a-z0-9][a-z0-9_-]*, got {agent!r}"
-        )
+    script: str | None = None
+    deps: list[str] = []
+    if raw.get("script") is not None:
+        # Script automation: a Python file runs directly in the project
+        # venv — no agent, no prompt, no MCP, no session.
+        script = _norm_script(name, raw)
+        deps = _norm_dependencies(name, raw.get("dependencies", []))
+        # The normalized dict re-enters this function (daemon-side
+        # re-validation), so accept its own output: prompt=None,
+        # agent="script", mcp_servers=[], continuity=False. Anything else
+        # here means a real conflict in hooke.toml.
+        for key, val in (
+            ("prompt", raw.get("prompt")),
+            ("agent", raw.get("agent")),
+            ("model", raw.get("model")),
+            ("thinking", raw.get("thinking")),
+            ("continuity", raw.get("continuity")),
+            ("mcp_servers", raw.get("mcp_servers")),
+        ):
+            conflict = val not in (None, "script") if key == "agent" else bool(val)
+            if conflict:
+                raise ConfigError(
+                    f"automation.{name}.{key}: not allowed with 'script' — "
+                    "script automations run a Python file directly, with no agent"
+                )
+        prompt: str | None = None
+        agent = "script"
+    else:
+        if raw.get("dependencies"):
+            raise ConfigError(f"automation.{name}.dependencies: requires 'script'")
+        prompt = raw.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ConfigError(f"automation.{name}.prompt: required, must be a non-empty string")
 
-    mcp = raw.get("mcp_servers", [])
+        agent = raw.get("agent", DEFAULT_AGENT)
+        if not isinstance(agent, str) or not _AUTOMATION_KEY_RE.match(agent):
+            raise ConfigError(
+                f"automation.{name}.agent: must match [a-z0-9][a-z0-9_-]*, got {agent!r}"
+            )
+
+    mcp = raw.get("mcp_servers", []) if script is None else []
     if not isinstance(mcp, list) or not all(isinstance(s, str) and s for s in mcp):
         raise ConfigError(f"automation.{name}.mcp_servers: must be a list of server names")
     if len(set(mcp)) != len(mcp):
@@ -147,6 +205,8 @@ def normalize_automation(name: str, raw: object) -> dict:
         "name": name,
         "prompt": prompt,
         "agent": agent,
+        "script": script,
+        "dependencies": deps,
         "mcp_servers": list(mcp),
         "schedule": schedule,
         "watch": watch,
@@ -289,4 +349,14 @@ schema = 1
 #prompt = "Re-index files that changed"
 #watch = {{ paths = ["notes/**"], ignore = ["**/.git/**"], debounce = "2s" }}
 #resume_on_restart = true
+
+# Script automation: runs a Python file directly — no LLM involved.
+# The script runs with <project>/.hooke/venv/bin/python; dependencies are
+# installed there at deploy and before each run. Trigger context arrives
+# as HOOKE_* environment variables; print "@hooke-write: <path>" per
+# written file so watch automations do not self-trigger.
+#[automation.disk-report]
+#script = "scripts/disk_report.py"
+#dependencies = ["httpx", "rich"]
+#schedule = {{ every = "1d" }}
 '''

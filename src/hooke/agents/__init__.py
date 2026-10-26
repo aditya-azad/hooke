@@ -23,7 +23,8 @@ CLI flags and protocols.
 There is no registry module: subclassing ``AgentRunner`` with a ``name``
 registers the implementation automatically. Concrete implementations live
 in sibling modules (``agents/pi.py``, ``agents/claude.py``,
-``agents/codex.py``); importing this package imports them.
+``agents/codex.py``, ``agents/script.py``); importing this package imports
+them.
 """
 
 from __future__ import annotations
@@ -37,4 +38,4 @@ __all__ = [
 ]
 
 # Importing the implementation modules registers them via __init_subclass__.
-from . import claude, codex, pi  # noqa: F401
+from . import claude, codex, pi, script  # noqa: F401

@@ -1,5 +1,6 @@
 """Executor: bounded worker pool that runs each automation through its
-configured agent (see :mod:`hooke.agents`; default: pi).
+configured backend (see :mod:`hooke.agents`; default: pi, or a direct
+Python script for script automations).
 
 Every run gets a run record persisted to runs.jsonl **at enqueue time,
 before the child starts** — that is what makes the boot recovery pass
@@ -89,12 +90,12 @@ def build_prompt(job: Job, resumed_from: str | None) -> str:
 
 
 def build_run_request(
-    job: Job, prompt: str, session_ref: str | None
+    job: Job, prompt: str | None, session_ref: str | None, run_id: str | None = None
 ) -> RunRequest:
-    """Translate the automation config into the agent-neutral run request."""
+    """Translate the automation config into the backend-neutral run request."""
     continuity = bool(job.cfg.get("continuity"))
     return RunRequest(
-        prompt=prompt,
+        prompt=prompt or "",
         cwd=job.root,
         model=job.cfg.get("model"),
         thinking=job.cfg.get("thinking"),
@@ -106,6 +107,16 @@ def build_run_request(
         if continuity
         else None,
         session_ref=session_ref,
+        # Script automations run this project-relative file directly.
+        script=job.cfg.get("script"),
+        dependencies=tuple(job.cfg.get("dependencies") or ()),
+        # Automation/run context; the script backend exposes it as HOOKE_*.
+        project=job.project,
+        automation=job.automation,
+        run_id=run_id,
+        trigger_kind=job.trigger_kind,
+        trigger=job.trigger,
+        resumed_from=job.resumed_from,
     )
 
 
@@ -240,11 +251,22 @@ class Executor:
         resumed_from: str | None,
         attempt: int,
     ) -> tuple[str, int | None, str | None, list[str], str | None]:
-        """Spawn one agent process for the automation's configured agent.
-        Returns (status, exit_code, error, write_paths, session_id)."""
+        """Spawn one backend process for the automation's configured
+        backend (agent or script). Returns (status, exit_code, error,
+        write_paths, session_id)."""
         agent: AgentRunner = AgentRunner.get_agent(job.cfg.get("agent") or "pi")
-        prompt = build_prompt(job, resumed_from)
-        argv = agent.build_argv(build_run_request(job, prompt, session_ref))
+        prompt = None if job.cfg.get("script") else build_prompt(job, resumed_from)
+        request = build_run_request(job, prompt, session_ref, run_id)
+        # Pre-run setup (script: venv sync). A failure here is a plain
+        # run failure — deterministic environment problems do not retry.
+        prepare_error = await agent.prepare(request)
+        if prepare_error:
+            return "failed", None, prepare_error, [], None
+        argv = agent.build_argv(request)
+        env = None
+        child_env = agent.child_env(request)
+        if child_env:
+            env = {**os.environ, **child_env}
         log_path = paths.run_logs_dir() / f"{run_id}.jsonl"
         started = time.time()
         self.run_store.append(
@@ -261,6 +283,7 @@ class Executor:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=job.root,
+                env=env,
                 stdin=asyncio.subprocess.DEVNULL,
                 # Some agents (claude, codex) read piped stdin as extra
                 # prompt input; never let them block on the daemon's stdin.

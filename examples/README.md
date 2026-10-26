@@ -4,3 +4,4 @@ Copy one of these files to a project root as `hooke.toml`, edit the prompts, the
 
 - [`scheduled.toml`](scheduled.toml) — periodic automations (schedules only)
 - [`watch.toml`](watch.toml) — file-triggered automations (watchers only)
+- [`script.toml`](script.toml) — Python-script automations (no LLM; runs in the project venv)

@@ -83,7 +83,9 @@ class WatcherSet:
         cfg = job.cfg["watch"]
         root = Path(job.root)
         include = _glob_matcher(cfg["paths"])
-        ignore = _glob_matcher(cfg["ignore"])
+        # Hooke's own per-project state (the script venv lives here) must
+        # never trigger automations, whatever the user's ignore list says.
+        ignore = _glob_matcher([".hooke/**", *cfg["ignore"]])
         debounce = float(cfg["debounce"])
         last_hashes = self.last_hashes.setdefault(key, {})
 

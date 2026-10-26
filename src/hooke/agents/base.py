@@ -31,6 +31,19 @@ class RunRequest:
     continuity: bool = False
     session_dir: Path | None = None
     session_ref: str | None = None
+    # Script automations (``script = "..."``): run this project-relative
+    # Python file directly instead of an agent, with ``dependencies``
+    # installed into the project venv (see :mod:`hooke.scriptenv`).
+    script: str | None = None
+    dependencies: tuple[str, ...] = ()
+    # Automation/run context. Agents ignore these; the script backend
+    # passes them to the child via HOOKE_* environment variables.
+    project: str | None = None
+    automation: str | None = None
+    run_id: str | None = None
+    trigger_kind: str | None = None
+    trigger: dict | None = None
+    resumed_from: str | None = None
 
 
 @dataclass(frozen=True)
@@ -59,8 +72,9 @@ class AgentRunner(ABC):
     """Common interface for automation backends.
 
     Subclass this with a unique ``name`` and the subclass is registered
-    automatically — that is the whole act of plugging a new agent into
-    hooke. Implementations must be constructible without arguments.
+    automatically — that is the whole act of plugging a new backend (LLM
+    agent or otherwise) into hooke. Implementations must be constructible
+    without arguments.
     """
 
     #: Registry key used in hooke.toml (``agent = "<name>"``).
@@ -110,6 +124,17 @@ class AgentRunner(ABC):
     @abstractmethod
     def build_argv(self, request: RunRequest) -> list[str]:
         """Argv for one headless run of ``request``."""
+
+    async def prepare(self, request: RunRequest) -> str | None:
+        """Optional async pre-run setup (venv sync, cache warm-up, ...).
+        Returning an error string fails the run before any process is
+        spawned."""
+        return None
+
+    def child_env(self, request: RunRequest) -> dict[str, str]:
+        """Extra environment variables for the child process, merged over
+        the daemon's own environment. Empty dict inherits it unchanged."""
+        return {}
 
     def parse_event(self, line: str) -> AgentEvent:
         """Interpret one stdout line. The base implementation ignores

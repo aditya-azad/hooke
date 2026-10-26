@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Hooke's per-project state (script venvs)
+.hooke/

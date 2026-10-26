@@ -12,6 +12,7 @@ Agentic workflow automator: a systemd daemon that watches files and schedules pe
 - [Why](#why)
 - [Install](#install)
 - [Quick start](#quick-start)
+- [Script automations (no LLM)](#script-automations-no-llm)
 - [Deploy and manage](#deploy-and-manage)
 - [Troubleshooting](#troubleshooting)
 - [Support](#support)
@@ -88,8 +89,8 @@ Per-automation fields:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `prompt` | required | The agent's task. Trigger context (changed files, resume note) is appended automatically. |
-| `agent` | `"pi"` | Which registered agent backend runs this automation (see `hooke.agents`; `pi`, `claude`, `codex`). |
+| `prompt` | required (unless `script`) | The agent's task. Trigger context (changed files, resume note) is appended automatically. |
+| `agent` | `"pi"` | Which registered backend runs this automation (see `hooke.agents`; `pi`, `claude`, `codex`). |
 | `mcp_servers` | `[]` | MCP servers this automation may use; validated against the agent's own MCP config at deploy (`~/.pi/agent/mcp.json`, `~/.claude.json`, or `~/.codex/config.toml`). |
 | `schedule` | — | `{ every = "6h" }` — durations like `90s`, `5m`, `6h`, `1d`. |
 | `watch` | — | `{ paths = [...], ignore = [...], debounce = "2s" }` — globs relative to the project root. |
@@ -98,8 +99,27 @@ Per-automation fields:
 | `model` / `thinking` | agent defaults | Per-run overrides passed to the agent (`thinking`: off…max). |
 | `timeout` | `30m` | Kill the agent process tree after this long. |
 | `concurrency` | `1` | Skip-if-running: overlapping triggers are dropped, never queued. |
+| `script` | — | Run a project Python file directly instead of an agent — see [Script automations](#script-automations-no-llm). |
+| `dependencies` | `[]` | Requirements installed into the project venv for script automations. |
 
 Ready-made configurations live in [`examples/`](examples/README.md) — copy one in as `hooke.toml` and deploy.
+
+## Script automations (no LLM)
+
+Not every chore needs a model. When an automation sets `script` instead of `prompt`, hooke runs that Python file directly:
+
+```toml
+[automation.disk-report]
+script = "scripts/disk_report.py"   # relative to the project root
+dependencies = ["httpx", "rich"]   # optional
+schedule = { every = "1d" }
+```
+
+- **Venv:** each script runs with `<project>/.hooke/venv/bin/python` — a dedicated venv in the same directory as `hooke.toml`, created on demand with the hooke interpreter and shared by all of the project's script automations. `deploy` builds the venv and installs `dependencies` eagerly so failures surface immediately; before each run the daemon re-syncs (a no-op when the dependency set is unchanged) and rebuilds the venv if it was deleted.
+- **Trigger context:** the script gets `HOOKE_PROJECT`, `HOOKE_AUTOMATION`, `HOOKE_TRIGGER_KIND`, `HOOKE_TRIGGER` (the trigger payload as JSON, e.g. the changed-file manifest for watchers), `HOOKE_ROOT`, `HOOKE_RUN_ID`, and `HOOKE_RESUMED_FROM` in its environment.
+- **Output:** stdout/stderr are captured into the run log (`hooke logs --run <id>`). A nonzero exit is a failed run; a script that exits zero without producing output is treated as a hard crash and retried.
+- **Watcher friendliness:** if the automation is file-triggered and the script writes project files, print one line per written path — `@hooke-write: <absolute path>` — so those paths are suppressed from re-triggering the same automation. Watchers also always ignore `.hooke/**`.
+- **Not allowed with `script`:** `prompt`, `agent`, `model`, `thinking`, `continuity`, and `mcp_servers` — scripts get no model, no tools, no session.
 
 ## Deploy and manage
 
@@ -113,7 +133,7 @@ hooke enable my-webapp
 hooke remove my-webapp    # gone from the registry
 ```
 
-`deploy` is the only way the daemon's registry changes. It validates fully first — TOML, schema version, glob sanity, MCP server existence, project trust — so mistakes fail loudly now instead of silently at 3am. An identical redeploy is a no-op ("up to date, nothing to do"); a changed one swaps atomically without resetting unchanged automations' timers.
+`deploy` is the only way the daemon's registry changes. It validates fully first — TOML, schema version, glob sanity, script existence, venv + dependency install, MCP server existence, project trust — so mistakes fail loudly now instead of silently at 3am. An identical redeploy is a no-op ("up to date, nothing to do"); a changed one swaps atomically without resetting unchanged automations' timers.
 
 ## Troubleshooting
 

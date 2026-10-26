@@ -1,0 +1,22 @@
+# Script automations: the daemon runs a Python file directly — no LLM.
+# Each script runs with <project>/.hooke/venv/bin/python; the automation's
+# `dependencies` are installed into that shared venv at deploy and checked
+# before every run. Trigger context arrives as HOOKE_* env vars
+# (HOOKE_PROJECT, HOOKE_AUTOMATION, HOOKE_TRIGGER_KIND, HOOKE_TRIGGER as
+# JSON, HOOKE_ROOT, HOOKE_RUN_ID). Print "@hooke-write: <path>" per written
+# file so watch automations do not self-trigger.
+
+[project]
+name = "my-webapp"                 # unique id; collisions rejected at deploy
+schema = 1
+
+[automation.disk-report]
+script = "scripts/disk_report.py"  # relative to this directory
+dependencies = ["rich"]            # optional; installed into .hooke/venv
+schedule = { every = "1d" }
+timeout = "10m"
+
+[automation.log-rotate]
+script = "scripts/rotate_logs.py"  # stdlib-only: no dependencies needed
+watch = { paths = ["logs/*.log"], debounce = "30s" }
+resume_on_restart = true

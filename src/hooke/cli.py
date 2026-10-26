@@ -13,7 +13,7 @@ import pathlib
 import sys
 import time
 
-from . import config, paths, protocol, systemd
+from . import config, paths, protocol, scriptenv, systemd
 from .agents import AgentRunner
 from .config import ConfigError
 
@@ -76,6 +76,21 @@ def _check_agents(norm: dict) -> None:
             _fail(f"automation '{auto['name']}': {e}")
 
 
+def _check_scripts(norm: dict, root: pathlib.Path) -> None:
+    """Script automations: the file must exist and the project venv must
+    build with the pinned dependencies — fail at deploy, not at 3am."""
+    for auto in norm["automations"].values():
+        script = auto.get("script")
+        if not script:
+            continue
+        if not (root / script).is_file():
+            _fail(f"automation '{auto['name']}': script {script!r} not found in {root}")
+        try:
+            scriptenv.ensure_venv(root, auto.get("dependencies") or [])
+        except scriptenv.ScriptEnvError as e:
+            _fail(f"automation '{auto['name']}': {e}")
+
+
 def _check_trust(root: pathlib.Path) -> None:
     """Project trust is user-approved in pi; the daemon runs headless, so
     warn loudly at deploy instead of failing silently at 3am."""
@@ -102,6 +117,7 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         _fail(str(e))
     _check_agents(norm)
     _check_mcp_servers(norm)
+    _check_scripts(norm, root)
     _check_trust(root)
 
     socket = paths.socket_path()
