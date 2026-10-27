@@ -14,6 +14,11 @@ import pathlib
 
 from .config import HOOKE_VERSION, PROTOCOL_VERSION
 
+# Frames are single JSON lines; a `logs --run` reply embeds up to 2000
+# lines of pi JSON events (system prompts alone exceed 64KB), so frames
+# need the same headroom the executor gives agent stdout.
+STREAM_LIMIT = 1 << 24
+
 
 class ProtocolError(Exception):
     pass
@@ -57,7 +62,7 @@ async def request(socket: pathlib.Path, op: dict, timeout: float = 30.0) -> dict
     """One-shot client round-trip: connect, handshake, send, await reply."""
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_unix_connection(str(socket)), timeout
+            asyncio.open_unix_connection(str(socket), limit=STREAM_LIMIT), timeout
         )
     except (ConnectionRefusedError, FileNotFoundError, OSError) as e:
         raise ProtocolError(

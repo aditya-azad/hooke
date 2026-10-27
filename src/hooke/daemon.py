@@ -198,7 +198,9 @@ class Daemon:
                 stale.unlink()
         old_umask = os.umask(0o077)
         try:
-            self.server = await asyncio.start_unix_server(self._handle_conn, str(sock))
+            self.server = await asyncio.start_unix_server(
+            self._handle_conn, str(sock), limit=protocol.STREAM_LIMIT
+        )
         finally:
             os.umask(old_umask)
         with contextlib.suppress(OSError):
@@ -235,6 +237,8 @@ class Daemon:
             return self._op_logs(op)
         if kind == "stop":
             return await self._op_stop(op)
+        if kind == "run":
+            return await self._op_run(op)
         return {"ok": False, "error": f"unknown op {kind!r}"}
 
     # ---------------------------------------------------------------- ops
@@ -323,6 +327,40 @@ class Daemon:
             return {"ok": False, "error": "run_id must be a string"}
         result = await self.executor.stop(run_id=run_id, project=project, automation=automation)
         return {"ok": True, **result}
+
+    async def _op_run(self, op: dict) -> dict:
+        """Manual trigger (``hooke run``): enqueue the automation now, with
+        ``trigger_kind: "manual"`` — same path as a schedule/watch fire.
+        Skip-if-running still applies: an automation that is already active
+        (per its ``concurrency`` limit) is reported as skipped, not queued
+        twice."""
+        name = op.get("project")
+        automation = op.get("automation")
+        if not isinstance(name, str) or not name:
+            return {"ok": False, "error": "project required"}
+        if automation is not None and not isinstance(automation, str):
+            return {"ok": False, "error": "automation must be a string"}
+        proj = self.registry.get_project(name)
+        if proj is None:
+            return {"ok": False, "error": f"unknown project {name!r}"}
+        if proj.get("disabled"):
+            return {"ok": False, "error": f"project {name!r} is disabled (hooke enable {name})"}
+        autos = proj["automations"]
+        if automation is not None:
+            if automation not in autos:
+                return {"ok": False, "error": f"unknown automation {automation!r} in project {name!r}"}
+            selected = [autos[automation]]
+        else:
+            selected = list(autos.values())
+            if not selected:
+                return {"ok": False, "error": f"project {name!r} has no automations"}
+        queued: list[str] = []
+        skipped: list[str] = []
+        for auto in selected:
+            job = Job(proj["name"], auto["name"], self._make_cfg(auto), proj["root"], "manual", None)
+            run_id = await self.executor.enqueue(job)
+            (queued if run_id is not None else skipped).append(auto["name"])
+        return {"ok": True, "queued": queued, "skipped": skipped}
 
     def _op_status(self) -> dict:
         armed = []

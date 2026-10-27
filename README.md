@@ -44,6 +44,8 @@ hooke install
 hooke install --user                  # user unit + loginctl enable-linger
 ```
 
+The generated unit bakes in the deploying shell's `PATH` as `Environment=PATH=...` — systemd's default service PATH is minimal and can't see version-manager or user-local agent installs (mise/asdf shims, `uv tool` shims, homebrew). Run `hooke install` from a shell where your agent binary resolves. If your PATH changes later (new tool manager, moved installs), rerun `hooke install` to re-capture it.
+
 Check it's alive — you should see the version and a pid:
 
 ```sh
@@ -128,6 +130,7 @@ hooke deploy              # in the project dir (or: hooke deploy ~/code/my-webap
 hooke status              # what's armed, next due times, recent runs
 hooke logs -n 20          # run history
 hooke logs --run <id>     # one run's full record + its pi event stream
+hooke run daily-papers   # trigger an automation once, now (all automations; --automation to pick one)
 hooke stop --run <id>     # kill a run's agent process tree now
 hooke disable my-webapp   # kept in the registry, inert
 hooke enable my-webapp
@@ -148,6 +151,17 @@ hooke stop my-webapp --automation test-on-change   # one automation's active run
 
 Running runs get their process tree killed immediately; queued runs are cancelled before they start; runs parked in retry backoff are cancelled too. Each targeted run is recorded as `stopped` in the run log, so `hooke logs` shows exactly what was interrupted. A stopped run never retries.
 
+### Running on demand
+
+Fire an automation whenever you want — a failed run you fixed the environment for, or just "do it now":
+
+```sh
+hooke run daily-papers                    # all of the project's automations
+hooke run daily-papers --automation test-on-change   # one
+```
+
+The run goes through the same queue as scheduled/watched runs (`trigger_kind: manual`), so concurrency limits, timeouts, session continuity, and MCP allowlists all apply identically. An automation that is already active is skipped, not double-queued.
+
 ## Troubleshooting
 
 ```sh
@@ -156,7 +170,7 @@ sudo journalctl -u hooke@$USER -f          # system install
 ```
 
 - `hooke status` says "cannot reach hooke daemon" → the unit isn't running; check `systemctl status hooke@$USER` and the journal above.
-- A run shows `failed` → read its event stream: `hooke logs --run <id>`.
+- A run shows `failed` with `<agent> binary not found on PATH` → the daemon's PATH can't see your agent binary. Units installed by hooke capture the deploying shell's PATH, so rerun `hooke install` from a shell where `<agent> --version` works, then restart (`systemctl --user restart hooke`, or `sudo systemctl restart hooke@$USER`).
 - A run shows `timed_out` → raise `timeout` in `hooke.toml` and redeploy.
 - A run is wedged (or you just want it gone now) → `hooke stop --run <id>`; the killed run is recorded as `stopped` and never retries.
 - Config errors at deploy quote the exact `hooke.toml` problem; fix and redeploy.
@@ -169,8 +183,8 @@ sudo journalctl -u hooke@$USER -f          # system install
 
 - [ ] Publish to PyPI (`uv tool install hooke`)
 - [ ] Boot-time catch-up scan of watched globs (currently fires only on the next change)
-- [ ] `hooke run` — trigger an automation once, on demand
 - [ ] Per-automation notification hooks (e.g. notify on `failed`/`timed_out`)
+- [ ] `deploy` warns when an automation's agent binary isn't on the daemon's PATH
 
 ## Contributing
 

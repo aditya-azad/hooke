@@ -238,6 +238,23 @@ def _try_query(op: dict) -> dict:
     return reply
 
 
+def cmd_run(args: argparse.Namespace) -> None:
+    op: dict = {"op": "run", "project": args.project}
+    if args.automation:
+        op["automation"] = args.automation
+    socket = paths.socket_path()
+    try:
+        reply = protocol_sync(socket, op)
+    except protocol.ProtocolError as e:
+        _fail(str(e))
+    if not reply.get("ok"):
+        _fail(reply.get("error", "run failed"))
+    for name in reply.get("queued") or []:
+        print(f"queued {args.project}/{name} — progress: hooke logs")
+    for name in reply.get("skipped") or []:
+        print(f"skipped {args.project}/{name} (already active; concurrency limit) — not queued again")
+
+
 def cmd_stop(args: argparse.Namespace) -> None:
     op: dict = {"op": "stop"}
     if args.run_id:
@@ -306,6 +323,10 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("project")
     rm.set_defaults(fn=cmd_remove)
 
+    run = sub.add_parser("run", help="trigger an automation once, on demand")
+    run.add_argument("project", help="project name (see hooke status)")
+    run.add_argument("--automation", help="one automation (default: all of the project's)")
+    run.set_defaults(fn=cmd_run)
     stop = sub.add_parser("stop", help="stop active runs (kill running agents, cancel queued ones)")
     stop.add_argument("project", nargs="?", help="stop all active runs of this project")
     stop.add_argument("--run", dest="run_id", help="stop one run by id")
